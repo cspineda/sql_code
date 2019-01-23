@@ -1,0 +1,178 @@
+##standardSQL
+with webandapp as (
+	select 
+    fullvisitorid
+		, visitStartTime
+    , [paid_case_when]
+    , lower(concat(trafficsource.source, " / ", trafficsource.medium)) as source_medium
+    , trafficSource.campaign as campaign
+    , cast(parse_date('%Y%m%d', date) as date) as date
+    , case when totals.newVisits is not null then 'new' else 'not new' end as new_user_flag
+    , sum(case 
+        when hits.page.pagePath = '/ocwidget/' then 0
+        when hits.page.pagePath like '%syndicated%' then 0
+        else 1
+        end) as platform_category
+	from `olympicchannel-ga.168112989.ga_sessions*`, unnest(hits) as hits
+	where 1=1
+    and cast(parse_date('%Y%m%d', date) as date) >= '2018-12-01'
+    and cast(parse_date('%Y%m%d', date) as date) < '2019-02-01'
+    and not [bot_traffic]
+    and trafficsource.source NOT IN ('platform.utest.com')
+  group by 1, 2, 3, 4, 5, 6, 7
+  
+  union all
+  
+  select 
+    fullvisitorid
+    , visitStartTime
+    , "Direct" as channelGrouping
+    , "(direct) / (none)" as source_medium
+    , "none" as campaign
+    , cast(parse_date('%Y%m%d', date) as date) as date
+    , case when totals.newVisits is not null then 'new' else 'not new' end as new_user_flag
+    , 1 as platform_category
+  from `olympicchannel-ga.178594195.ga_sessions*`, unnest(hits) as hits
+  where 1=1
+    and cast(parse_date('%Y%m%d', date) as date) >= '2018-12-01'
+    and cast(parse_date('%Y%m%d', date) as date) < '2019-02-01'
+    and not [bot_traffic]
+    and trafficsource.source NOT IN ('platform.utest.com')
+  group by 1, 2, 3, 4, 5, 6, 7, 8
+)
+, user_mapping_base as (
+  select 
+    fullvisitorid
+    , [other_fix_case_when] as first_channel
+    , source_medium
+    , campaign
+    , extract(month FROM date) as month
+    , sum(platform_category) over (partition by fullvisitorid, visitStartTime) as platform_category
+    , row_number() over (partition by fullvisitorid order by visitStartTime) as rk
+  from webandapp
+  where 1=1
+    and date >= '2018-12-01'
+    and date < '2019-01-01'
+)
+, user_mapping_ as (
+  select
+    month
+    , fullvisitorid
+    , first_channel
+    , case 
+      when first_channel = 'Paid' then ([paid_drilldown_case_when]) 
+      when first_channel = 'Referral' then ([referral_case_when])
+      when first_channel = 'Social' then ([social_case_when])
+      else first_channel
+      end as drilldown
+    , source_medium
+    , platform_category
+  from user_mapping_base
+  where 1=1
+    and rk = 1
+  group by 1, 2, 3, 4, 5, 6
+) 
+, ono_and_embeds as (
+  select
+    month
+    , "On-Platform" as platform_category
+    , first_channel
+    , drilldown
+    , source_medium
+    , fullvisitorid
+  from user_mapping_
+  where 1=1
+    and platform_category > 0
+  group by 1, 2, 3, 4, 5, 6
+
+  union all
+
+  select
+    month
+    , "Embed" as platform_category
+    , first_channel
+    , drilldown
+    , source_medium
+    , fullvisitorid
+  from user_mapping_
+  where 1=1
+    and platform_category = 0
+  group by 1, 2, 3, 4, 5, 6
+)
+, current_month_ as (
+  select
+    cast(month as string) as month
+    , case 
+      when first_channel = 'Paid' then 'Paid'
+      when platform_category = 'Embed' then 'Embed'
+      else 'Core Traffic'
+      end as platform_category
+    , first_channel
+    , drilldown
+    , source_medium
+    , count(distinct fullvisitorid) as users
+  from ono_and_embeds
+  where 1=1
+  group by 1, 2, 3, 4, 5
+)
+, return_users_ as (
+  select 
+    extract(month FROM date) as next_month
+    , fullvisitorid
+  from webandapp
+  where 1=1
+    and date >= '2019-01-01'
+    and date < '2019-02-01'
+    and fullvisitorid in (select distinct fullvisitorid from ono_and_embeds)
+    and new_user_flag = 'not new'
+)  
+
+select
+  case when month = 12 then 'Dec' else null end as month
+  , case 
+    when first_channel = 'Paid' then 'Paid'
+    when platform_category = 'Embed' then 'Embed'
+    else 'Core Traffic'
+    end as platform_category
+  , case 
+    when first_channel = 'Paid' then 'Paid'
+    when platform_category = 'Embed' then 'Embed'       
+    when first_channel = 'Organic Search' then 'SEO' 
+    when first_channel = 'Email' then 'CRM' 
+    else first_channel 
+    end as channelGrouping
+  , drilldown
+  , source_medium
+  , count(distinct fullvisitorid) as users
+from ono_and_embeds
+where 1=1
+group by 1, 2, 3, 4, 5
+having [platform_category=Platform_Category]
+
+union all
+
+select
+   case when next_month = 1 then 'Jan' else null end as month
+  , case 
+    when first_channel = 'Paid' then 'Paid'
+    when platform_category = 'Embed' then 'Embed'
+    else 'Core Traffic'
+    end as platform_category
+  , case 
+    when first_channel = 'Paid' then 'Paid'
+    when platform_category = 'Embed' then 'Embed'       
+    when first_channel = 'Organic Search' then 'SEO' 
+    when first_channel = 'Email' then 'CRM' 
+    else first_channel 
+    end as channelGrouping
+  , drilldown
+  , source_medium
+  , count(distinct ru.fullvisitorid) as users
+from ono_and_embeds oe
+inner join return_users_ ru
+using (fullvisitorid)
+where 1=1
+group by 1, 2, 3, 4, 5
+having [platform_category=Platform_Category]
+
+order by 1
