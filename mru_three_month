@@ -1,0 +1,193 @@
+##standardSQL
+with webandapp as (
+	select 
+    fullvisitorid
+		, visitStartTime
+    , [paid_case_when]
+    , lower(concat(trafficsource.source, " / ", trafficsource.medium)) as source_medium
+    , cast(parse_date('%Y%m%d', date) as date) as date
+    , concat(fullVisitorId, ".", cast(visitId AS string)) as session_id
+    , sum(case 
+        when hits.page.pagePath = '/ocwidget/' then 0
+        when hits.page.pagePath like '%syndicated%' then 0
+        else 1
+        end) as platform_category
+	from `olympicchannel-ga.168112989.ga_sessions*`, unnest(hits) as hits
+	where 1=1
+    and cast(parse_date('%Y%m%d', date) as date) >= '2018-10-01'
+    and cast(parse_date('%Y%m%d', date) as date) < '2019-01-16'
+    and not [bot_traffic]
+    and trafficsource.source NOT IN ('platform.utest.com')
+  group by 1, 2, 3, 4, 5, 6
+  
+  union all
+  
+  select 
+    fullvisitorid
+    , visitStartTime
+    , "Direct" as channelGrouping
+    , "(direct) / (none)" as source_medium
+    , cast(parse_date('%Y%m%d', date) as date) as date
+    , concat(fullVisitorId, ".", cast(visitId AS string)) as session_id
+    , 1 as platform_category
+  from `olympicchannel-ga.178594195.ga_sessions*`, unnest(hits) as hits
+  where 1=1
+    and cast(parse_date('%Y%m%d', date) as date) >= '2018-10-01'
+    and cast(parse_date('%Y%m%d', date) as date) < '2019-01-16'
+    and not [bot_traffic]
+    and trafficsource.source NOT IN ('platform.utest.com')
+  group by 1, 2, 3, 4, 5, 6
+)
+, user_mapping_base as (
+  select 
+    fullvisitorid
+    , [other_fix_case_when] as first_channel
+    , sum(platform_category) over (partition by fullvisitorid, visitStartTime) as platform_category
+    , row_number() over (partition by fullvisitorid order by visitStartTime) as rk
+  from webandapp
+  where 1=1
+)
+, ono_and_embeds as (
+  select
+    case when platform_category > 0 then 'On-Platform' else 'Embed' end as platform_category
+    , first_channel
+    , fullvisitorid
+  from user_mapping_base
+  where 1=1
+    and rk = 1
+  group by 1, 2, 3
+)
+, oct_users as (
+  select 
+    extract(month FROM date) as month
+    , session_id
+    , fullvisitorid
+  from webandapp
+  where 1=1
+    and date >= '2018-10-01'
+    and date < '2018-11-01'
+)
+, nov_users as (
+  select
+    extract(month FROM date) as month
+    , session_id
+    , fullvisitorid
+  from webandapp
+  where 1=1
+    and date >= '2018-11-01'
+    and date < '2018-12-01'
+)
+, nov_return_users as (
+  select
+    month
+    , fullvisitorid
+  from nov_users
+  where 1=1
+    and fullvisitorid in (select fullvisitorid from oct_users)
+    and session_id not in (select session_id from oct_users)
+)
+, dec_users as (
+  select
+    extract(month FROM date) as month
+    , session_id
+    , fullvisitorid
+  from webandapp
+  where 1=1
+    and date >= '2018-12-01'
+    and date < '2019-01-01'
+)
+, dec_return_users as (
+  select
+    month
+    , fullvisitorid
+  from dec_users
+  where 1=1
+    and fullvisitorid in (select fullvisitorid from nov_users)
+    and session_id not in (select session_id from nov_users)
+)
+, jan_users as (
+  select
+    extract(month FROM date) as month
+    , session_id
+    , fullvisitorid
+  from webandapp
+  where 1=1
+    and date >= '2019-01-01'
+    and date < '2019-02-01'
+)
+, jan_return_users as (
+  select
+    month
+    , fullvisitorid
+  from jan_users
+  where 1=1
+    and fullvisitorid in (select fullvisitorid from dec_users)
+    and session_id not in (select session_id from dec_users)
+)
+
+select
+  case 
+    when cast(month as string) = '11' then 'Nov' 
+    when cast(month as string) = '12' then 'Dec'
+    when cast(month as string) = '1' then 'Jan' 
+    else null
+    end as month
+  , case 
+    when first_channel = 'Paid' then 'Paid'
+    when platform_category = 'Embed' then 'Embed'
+    else 'Core Traffic'
+    end as platform_category
+--  , first_channel
+  , count(distinct nov.fullvisitorid) as users
+from nov_return_users nov
+left join ono_and_embeds
+using (fullvisitorid)
+group by 1, 2-- , 3
+
+union all
+
+select
+  case 
+    when cast(month as string) = '11' then 'Nov' 
+    when cast(month as string) = '12' then 'Dec'
+    when cast(month as string) = '1' then 'Jan' 
+    else null
+    end as month
+  , case 
+    when first_channel = 'Paid' then 'Paid'
+    when platform_category = 'Embed' then 'Embed'
+    else 'Core Traffic'
+    end as platform_category
+--  , first_channel
+  , count(distinct dec.fullvisitorid) as users
+from dec_return_users dec
+left join ono_and_embeds
+using (fullvisitorid)
+group by 1, 2-- , 3
+
+union all
+
+select
+  case 
+    when cast(month as string) = '11' then 'Nov' 
+    when cast(month as string) = '12' then 'Dec'
+    when cast(month as string) = '1' then 'Jan' 
+    else null
+    end as month
+  , case 
+    when first_channel = 'Paid' then 'Paid'
+    when platform_category = 'Embed' then 'Embed'
+    else 'Core Traffic'
+    end as platform_category
+--  , first_channel
+  , count(distinct jan.fullvisitorid) as users
+from jan_return_users jan
+left join ono_and_embeds
+using (fullvisitorid)
+group by 1, 2-- , 3
+
+order by case 
+  when month = 'Nov' then 1
+  when month = 'Dec' then 2
+  else 3 end
+  , platform_category desc
