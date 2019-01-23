@@ -1,0 +1,117 @@
+##standardSQL
+with webandapp as (
+  select
+    fullVisitorId
+    , visitStartTime
+    , hits.page.pagePath
+    , totals.pageviews as pageviews
+    , totals.visits as visits
+    , hits.type
+    , hits.hitNumber
+    , case
+        when hits.page.pagePath = '/ocwidget/' then 0
+        when hits.page.pagePath like '%syndicated%' then 0
+        else 1
+        end as platform_category
+    , [paid_case_when]
+    , lower(concat(trafficsource.source, " / ", trafficsource.medium)) as source_medium
+    , trafficSource.campaign as campaign
+  --  , split(replace(replace(replace(lower(hits.referer), 'https://', ''), 'http://', ''), 'www.', ''), '/')[offset(0)] as referer
+    , min(hits.hitNumber) over (partition by fullVisitorId, visitStartTime) as first_hit
+  from `olympicchannel-ga.168112989.ga_sessions*` as GA,
+    UNNEST(GA.hits) as hits
+  where 1=1
+    and [cast(parse_date('%Y%m%d', date) as date)=daterange]
+    and not [bot_traffic]
+    and trafficsource.source NOT IN ('platform.utest.com')
+  
+  union all
+  
+  select
+    fullVisitorId
+    , visitStartTime
+    , hits.page.pagePath
+    , totals.pageviews as pageviews
+    , totals.visits as visits
+    , hits.type
+    , hits.hitNumber
+    , 1 as platform_category
+    , "Direct" as channelGrouping
+    , "(direct) / (none)" as source_medium
+    , "none" as campaign
+   -- , hits.referer
+    , min(hits.hitNumber) over (partition by fullVisitorId, visitStartTime) as first_hit
+  from `olympicchannel-ga.178594195.ga_sessions*` as GA,
+    UNNEST(GA.hits) as hits
+  where 1=1
+    and [cast(parse_date('%Y%m%d', date) as date)=daterange]
+    and not [bot_traffic]
+    and trafficsource.source NOT IN ('platform.utest.com')
+)
+, platform_breakdown as (
+  select
+    channelGrouping
+    , case 
+      when channelGrouping = 'Paid' then ([paid_drilldown_case_when]) 
+      when channelGrouping = 'Referral' then ([referral_case_when])
+      when channelGrouping = 'Social' then ([social_case_when])
+        else channelGrouping
+        end as drilldown
+    , source_medium
+    , campaign
+    , fullVisitorId
+    , visitStartTime
+    , sum(platform_category) as platform_category
+    , sum(case when hitNumber = first_hit then visits else 0 end) as sessions
+  from webandapp
+  group by 1, 2, 3, 4, 5, 6
+)
+, onoandembeds as (
+  select
+    "Embed" as platform_category
+    , channelGrouping
+    , drilldown
+    , source_medium
+    , campaign
+    , sum(sessions) as sessions
+  from platform_breakdown
+  where 1=1
+    and platform_category = 0
+  group by 1, 2, 3, 4, 5
+  having sessions > 0
+
+  union all
+
+  select
+    "On-Platform" as platform_category
+    , channelGrouping
+    , drilldown
+    , source_medium
+    , campaign
+    , sum(sessions) as sessions
+  from platform_breakdown
+  where 1=1
+    and platform_category > 0
+  group by 1, 2, 3, 4, 5
+  having sessions > 0
+)
+
+select
+  case
+    when channelGrouping = 'Paid' then 'Paid'
+    when platform_category = 'Embed' then 'Embed'
+    else 'Core Traffic'
+    end as platform_category
+    , case 
+      when platform_category = 'Embed' then 'Embed' 
+      when channelGrouping = 'Paid' then 'Paid'      
+      when channelGrouping = 'Organic Search' then 'SEO' 
+      when channelGrouping = 'Email' then 'CRM' 
+      else channelGrouping 
+      end as channelGrouping
+  , case when platform_category = 'Embed' then ([embedded_case_when]) else drilldown end as drilldown
+  , sum(sessions) as sessions
+from onoandembeds
+group by 1, 2, 3
+having [drilldown=Drilldown] and [platform_category=Platform_Category] and [channelGrouping=Channel_Grouping]
+order by 4 desc
