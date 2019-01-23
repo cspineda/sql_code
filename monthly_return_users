@@ -1,0 +1,176 @@
+##standardSQL
+-- pull data from both web and app
+with webandapp as (
+	select 
+    fullvisitorid
+		, visitStartTime
+    , case 
+        when lower(hits.referer) like '%googleads.g.doubleclick.net%' then 'Paid'
+        when lower(trafficSource.medium) like '%cpc%' then 'Paid'
+        when lower(trafficSource.medium) like '%cpm%' then 'Paid'
+        when lower(trafficSource.medium) like '%cpe%' then 'Paid'
+        when lower(trafficSource.source) like '%display%' then 'Paid'
+        when lower(trafficSource.medium) like '%display%' then 'Paid'
+        when lower(trafficSource.medium) like '%cpv%' then 'Paid'
+        when lower(trafficSource.campaign) like '%paid%' then 'Paid'
+        when lower(trafficSource.source) like '%glassview-%' then 'Paid'
+        when lower(trafficSource.medium) like '%fb-ad%' then 'Paid'
+        when lower(trafficSource.medium) like '%fb_ad%' then 'Paid'
+        when lower(trafficSource.source) like '%google-tier1%' then 'Paid'
+        when lower(trafficSource.medium) like '%paid_search%' then 'Paid'
+        when lower(trafficSource.source) like '%gdn%' then 'Paid'
+        when lower(trafficSource.medium) like '%paid_social%' then 'Paid'
+        when lower(trafficSource.source) like '%native%' then 'Paid'
+        when lower(trafficSource.source) like '%-ad-%' then 'Paid'
+        when lower(trafficSource.medium) like 'tw-ad%' then 'Paid'
+        else channelGrouping
+        end as channelGrouping
+    , lower(concat(trafficsource.source, " / ", trafficsource.medium)) as source_medium
+    , cast(parse_date('%Y%m%d', date) as date) as date
+    , concat(fullVisitorId, ".", cast(visitId AS string)) as session_id
+    , sum(case 
+        when hits.page.pagePath = '/ocwidget/' then 0
+        when hits.page.pagePath like '%syndicated%' then 0
+        else 1
+        end) as platform_category
+	from `olympicchannel-ga.168112989.ga_sessions*`, unnest(hits) as hits
+	where 1=1
+    and cast(parse_date('%Y%m%d', date) as date) >= '2018-11-01'
+    and cast(parse_date('%Y%m%d', date) as date) < '2019-02-01'
+    and not (channelGrouping = 'Direct' and device.operatingSystem = 'Linux')
+    and trafficsource.source NOT IN ('platform.utest.com')
+  group by 1, 2, 3, 4, 5, 6
+  
+  union all
+  
+  select 
+    fullvisitorid
+    , visitStartTime
+    , "Direct" as channelGrouping
+    , "(direct) / (none)" as source_medium
+    , cast(parse_date('%Y%m%d', date) as date) as date
+    , concat(fullVisitorId, ".", cast(visitId AS string)) as session_id
+    , 1 as platform_category
+  from `olympicchannel-ga.178594195.ga_sessions*`, unnest(hits) as hits
+  where 1=1
+    and cast(parse_date('%Y%m%d', date) as date) >= '2018-11-01'
+    and cast(parse_date('%Y%m%d', date) as date) < '2019-02-01'
+    and not (channelGrouping = 'Direct' and device.operatingSystem = 'Linux')
+    and trafficsource.source NOT IN ('platform.utest.com')
+  group by 1, 2, 3, 4, 5, 6
+)
+-- get the first session for each user in the given time frame to map as first touch source
+, user_mapping_base as (
+  select 
+    fullvisitorid
+    , case 
+        when (channelGrouping = '(Other)' and source_medium like '%facebook%') then 'Social'
+        when (channelGrouping = '(Other)' and source_medium like '%instagram%') then 'Social'
+        when (channelGrouping = '(Other)' and source_medium like '%facebook%') then 'Social'
+        when (channelGrouping = '(Other)' and source_medium like '%twitter%') then 'Social'
+        when (channelGrouping = '(Other)' and source_medium like '%youtube%') then 'Social'
+        when (channelGrouping = '(Other)' and source_medium like '%snapchat%') then 'Social'
+        when (channelGrouping = '(Other)' and source_medium like '%influencers%') then 'Social'
+        when (channelGrouping = '(Other)' and source_medium like '%/ fb%') then 'Social'
+        else channelGrouping
+        end as first_channel
+    , sum(platform_category) over (partition by fullvisitorid, visitStartTime) as platform_category
+    , row_number() over (partition by fullvisitorid order by visitStartTime) as rk
+  from webandapp
+  where 1=1
+)
+-- keep only the first session for each user and separate between On-Platform and Embed
+, ono_and_embeds as (
+  select
+    case when platform_category > 0 then 'On-Platform' else 'Embed' end as platform_category
+    , first_channel
+    , fullvisitorid
+  from user_mapping_base
+  where 1=1
+    and rk = 1
+  group by 1, 2, 3
+)
+-- get users from each month into their own groups
+, nov_users as (
+  select 
+    extract(month FROM date) as month
+    , session_id
+    , fullvisitorid
+  from webandapp
+  where 1=1
+    and date >= '2018-11-01'
+    and date < '2018-12-01'
+)
+, dec_users as (
+  select
+    extract(month FROM date) as month
+    , session_id
+    , fullvisitorid
+  from webandapp
+  where 1=1
+    and date >= '2018-12-01'
+    and date < '2019-01-01'
+)
+-- keep only users that have been in both of the previous months but remove users whose same session fell in both (such as sessions that last from 11/30 to 12/1
+, dec_return_users as (
+  select
+    month
+    , fullvisitorid
+  from dec_users
+  where 1=1
+    and fullvisitorid in (select fullvisitorid from nov_users)
+    and session_id not in (select session_id from nov_users)
+)
+-- repeat same procedure for next two months
+, jan_users as (
+  select
+    extract(month FROM date) as month
+    , session_id
+    , fullvisitorid
+  from webandapp
+  where 1=1
+    and date >= '2019-01-01'
+    and date < '2019-02-01'
+)
+, jan_return_users as (
+  select
+    month
+    , fullvisitorid
+  from jan_users
+  where 1=1
+    and fullvisitorid in (select fullvisitorid from dec_users)
+    and session_id not in (select session_id from dec_users)
+)
+-- separte MRU between the two given months
+
+select
+  case when cast(month as string) = '12' then 'Dec' else 'Jan' end as month
+  , case 
+    when first_channel = 'Paid' then 'Paid'
+    when platform_category = 'Embed' then 'Embed'
+    else 'Core Traffic'
+    end as platform_category
+  , first_channel
+  , count(distinct dec.fullvisitorid) as users
+from dec_return_users dec
+left join ono_and_embeds
+using (fullvisitorid)
+group by 1, 2, 3
+
+union all
+
+select
+  case when cast(month as string) = '1' then 'Jan' else 'Dec' end as month
+  , case 
+    when first_channel = 'Paid' then 'Paid'
+    when platform_category = 'Embed' then 'Embed'
+    else 'Core Traffic'
+    end as platform_category
+  , first_channel
+  , count(distinct jan.fullvisitorid) as users
+from jan_return_users jan
+left join ono_and_embeds
+using (fullvisitorid)
+group by 1, 2, 3
+
+order by 1, 2 desc
