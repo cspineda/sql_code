@@ -1,9 +1,9 @@
 ##standardSQL
 -- pull data from both web and app
 with webandapp as (
-	select 
+  select 
     fullvisitorid
-		, visitStartTime
+    , visitStartTime
     , case 
         when lower(hits.referer) like '%googleads.g.doubleclick.net%' then 'Paid'
         when lower(trafficSource.medium) like '%cpc%' then 'Paid'
