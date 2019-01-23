@@ -1,0 +1,76 @@
+##standardSQL
+with web as (
+	select 
+		[cast(parse_date('%Y%m%d', date) as date):aggregation] as date
+		, fullvisitorid
+    , case when (hits.page.pagePath like '%hanyu%' or hits.page.pagePath like '%hanyu%') then 1 else 0 end as hanyu_page_views
+    , totals.visits as visits
+		, case when totals.newVisits is not null then 'new' else 'not new' end as new_user_flag
+	from `olympicchannel-ga.168112989.ga_sessions*`, unnest(hits) as hits
+	where 1=1
+		and [cast(parse_date('%Y%m%d', date) as date)=daterange]
+    and hits.type = 'PAGE'
+)
+ , new_users_first_day_ as (
+  select 
+    date
+    , fullvisitorid
+    , sum(hanyu_page_views) as hanyu_page_views
+    , row_number() over (partition by fullvisitorid order by date) as rk
+  from web
+  where 1=1
+    and new_user_flag = 'new'
+    and date >= '2018-10-01'
+    and date < '2018-11-01'
+  group by 1, 2
+  having (hanyu_page_views >= 1)
+)
+, new_users_hanyu_ as (
+  select
+    fullvisitorid
+    , date as first_day 
+    , hanyu_page_views
+  from new_users_first_day_
+  where 1=1
+    and rk = 1
+  order by 2
+)  
+, return_users_ as (
+  select
+    fullvisitorid
+    , date
+  from web
+  where 1=1
+    and new_user_flag = 'not new'
+    and date >= '2018-11-01'
+    and date < '2018-12-01'
+)
+, combined as (
+  select
+    hanyu.fullvisitorid
+    , first_day
+    , date as next_day
+    from new_users_hanyu_ hanyu
+    left join return_users_ ret_u
+    using (fullvisitorid)
+    where 1=1
+      and date is not null
+)
+, total_users_ as (
+  select 
+    fullvisitorid
+    , sum(hanyu_page_views) as hanyu_page_views
+  from web
+  where 1=1
+    and date >= '2018-10-01'
+    and date < '2018-11-01'
+  group by 1
+  having hanyu_page_views >= 1
+)
+
+select 
+  (select count(distinct fullvisitorid) from total_users_) as total_october_hanyu_users
+  , (select count(distinct fullvisitorid) from new_users_first_day_) as october_new_hanyu_users
+  , count(distinct fullvisitorid) as returning_hanyu_users
+  , count(distinct fullvisitorid) / (select count(distinct fullvisitorid) from new_users_first_day_) as percentage_return_users
+from combined
