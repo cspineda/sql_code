@@ -1,0 +1,548 @@
+##standardSQL
+with webandapp as (
+	select 
+    fullvisitorid
+		, visitStartTime
+    , case 
+        when lower(hits.referer) like '%googleads.g.doubleclick.net%' then 'Paid'
+        when lower(trafficSource.medium) like '%cpc%' then 'Paid'
+        when lower(trafficSource.medium) like '%cpm%' then 'Paid'
+        when lower(trafficSource.medium) like '%cpe%' then 'Paid'
+        when lower(trafficSource.source) like '%display%' then 'Paid'
+        when lower(trafficSource.medium) like '%display%' then 'Paid'
+        when lower(trafficSource.medium) like '%cpv%' then 'Paid'
+        when lower(trafficSource.campaign) like '%paid%' then 'Paid'
+        when lower(trafficSource.source) like '%glassview-%' then 'Paid'
+        when lower(trafficSource.medium) like '%fb-ad%' then 'Paid'
+        when lower(trafficSource.medium) like '%fb_ad%' then 'Paid'
+        when lower(trafficSource.source) like '%google-tier1%' then 'Paid'
+        when lower(trafficSource.medium) like '%paid_search%' then 'Paid'
+        when lower(trafficSource.source) like '%gdn%' then 'Paid'
+        when lower(trafficSource.medium) like '%paid_social%' then 'Paid'
+        when lower(trafficSource.source) like '%native%' then 'Paid'
+        when lower(trafficSource.source) like '%-ad-%' then 'Paid'
+        when lower(trafficSource.medium) like 'tw-ad%' then 'Paid'
+        else channelGrouping
+        end as channelGrouping
+    , lower(concat(trafficsource.source, " / ", trafficsource.medium)) as source_medium
+    , trafficSource.campaign as campaign
+    , cast(parse_date('%Y%m%d', date) as date) as date
+    , concat(fullVisitorId, ".", cast(visitId AS string)) as session_id
+    , sum(case 
+        when hits.page.pagePath like '%syndicated%' then 0
+        else 1
+        end) as platform_category
+	from `olympicchannel-ga.168112989.ga_sessions*`, unnest(hits) as hits
+	where 1=1
+    and cast(parse_date('%Y%m%d', date) as date) >= '2018-11-01'
+    and cast(parse_date('%Y%m%d', date) as date) < '2019-02-01'
+    and not (channelGrouping = 'Direct' and device.operatingSystem = 'Linux')
+    and trafficsource.source NOT IN ('platform.utest.com')
+  group by 1, 2, 3, 4, 5, 6, 7
+  
+  union all
+  
+  select 
+    fullvisitorid
+    , visitStartTime
+    , "Direct" as channelGrouping
+    , "(direct) / (none)" as source_medium
+    , "none" as campaign
+    , cast(parse_date('%Y%m%d', date) as date) as date
+    , concat(fullVisitorId, ".", cast(visitId AS string)) as session_id
+    , 1 as platform_category
+  from `olympicchannel-ga.178594195.ga_sessions*`, unnest(hits) as hits
+  where 1=1
+    and cast(parse_date('%Y%m%d', date) as date) >= '2018-11-01'
+    and cast(parse_date('%Y%m%d', date) as date) < '2019-02-01'
+    and not (channelGrouping = 'Direct' and device.operatingSystem = 'Linux')
+    and trafficsource.source NOT IN ('platform.utest.com')
+  group by 1, 2, 3, 4, 5, 6, 7
+)
+, user_mapping_base as (
+  select 
+    fullvisitorid
+    , case 
+        when (channelGrouping = '(Other)' and source_medium like '%facebook%') then 'Social'
+        when (channelGrouping = '(Other)' and source_medium like '%instagram%') then 'Social'
+        when (channelGrouping = '(Other)' and source_medium like '%facebook%') then 'Social'
+        when (channelGrouping = '(Other)' and source_medium like '%twitter%') then 'Social'
+        when (channelGrouping = '(Other)' and source_medium like '%youtube%') then 'Social'
+        when (channelGrouping = '(Other)' and source_medium like '%snapchat%') then 'Social'
+        when (channelGrouping = '(Other)' and source_medium like '%influencers%') then 'Social'
+        when (channelGrouping = '(Other)' and source_medium like '%/ fb%') then 'Social'
+        else channelGrouping
+        end as first_channel
+    , source_medium
+    , campaign
+    , sum(platform_category) over (partition by fullvisitorid, visitStartTime) as platform_category
+    , row_number() over (partition by fullvisitorid order by visitStartTime) as rk
+  from webandapp
+)
+, ono_and_embeds as (
+  select
+    case when platform_category > 0 then 'On-Platform' else 'Embed' end as platform_category
+    , first_channel
+    , case 
+      when first_channel = 'Paid' then (case 
+                                          when source_medium like '%gdn%' then 'Paid Display'
+                                          when source_medium like '%paid_search%' then 'Paid Search'
+                                          when source_medium like '%google / cpc%' then 'Paid Search'
+                                          when source_medium like '%display%' then 'Paid Display'
+                                          when source_medium like '%paid_social%' then 'Paid Social'
+                                          when source_medium like '%twitter / cp%' then 'Paid Social'
+                                          when source_medium like '%snapchat / cp%' then 'Paid Social'
+                                          when source_medium like '%facebook / cp%' then 'Paid Social'
+                                          when source_medium like '%instagram / cp%' then 'Paid Social'
+                                          when (source_medium like '%post%' and lower(campaign) like '%paid%') then 'Paid Social'
+                                          when (source_medium like '%influencer%' and lower(campaign) like '%paid%') then 'Paid Social'
+                                          when (source_medium like '%preroll%' and lower(campaign) like '%paid%') then 'Paid Social'
+                                          when source_medium like '%cmp%' then 'Impressions'
+                                          when source_medium like '%googleads.g.doubleclick.net%' then 'Paid Display'
+                                          when source_medium like '%cpm%' then 'Paid Display'
+                                          else 'Other Paid'
+                                          end) 
+      when first_channel = 'Referral' then (case    
+                                          when source_medium like '%nbcsports%' then 'RHB Referrals'
+                                          when source_medium like '%nbc%' then 'RHB Referrals'
+                                          when source_medium like '%eurosport.%' then 'RHB Referrals'
+                                          when source_medium like '%beinsports%' then 'RHB Referrals'
+                                          when source_medium like '%globo.com%' then 'RHB Referrals'
+                                          when source_medium like '%nhk.or%' then 'RHB Referrals'
+                                          when source_medium like '%ntv.co.jp%' then 'RHB Referrals'
+                                          when source_medium like '%fujitv%' then 'RHB Referrals'
+                                          when source_medium like '%tv-asahi%' then 'RHB Referrals'
+                                          when source_medium like '%tbs.co.jp%' then 'RHB Referrals'
+                                          when source_medium like '%tv-tokyo%' then 'RHB Referrals'
+                                          when source_medium like '%gorin.jp%' then 'RHB Referrals'
+                                          when source_medium like '%livesoccer%' then 'RHB Referrals' -- ss9 / looks like super sports only has this one
+                                          when source_medium like '%naver.%' then 'Partnership Referrals'
+                                          when source_medium like '%navercorp%' then 'Partnership Referrals'
+                                          when source_medium like '%sportsnavi%' then 'Partnership Referrals'
+                                          when source_medium like '%bridgestone%' then 'FP Referrals'  
+                                          -- didn't see anyone from toyota that weren't articles
+                                          when source_medium like '%olympic.org%' then 'Olympic Family Referrals'
+                                          when source_medium like '%buenosaires2018%' then 'Olympic Family Referrals'
+                                          when source_medium like '%pyeongchang2018%' then 'Olympic Family Referrals'
+                                          when source_medium like '%paralympic%' then 'Olympic Family Referrals'
+                                          when source_medium like '%issf-sports%' then 'Olympic Family Referrals'
+                                          when source_medium like '%cheerunion%' then 'Olympic Family Referrals'
+                                          when source_medium like '%canoeicf%' then 'Olympic Family Referrals'
+                                          when source_medium like '%com.org.mx%' then 'Olympic Family Referrals'
+                                          when source_medium like '%ifsc-climbing%' then 'Olympic Family Referrals'
+                                          when source_medium like '%isu.org%' then 'Olympic Family Referrals'
+                                          when source_medium like '%obs.tv%' then 'Olympic Family Referrals'
+                                          when source_medium like '%aiba%' then 'Olympic Family Referrals'
+                                          when source_medium like '%teamusa%' then 'Olympic Family Referrals'
+                                          when source_medium like '%olimpiyatkomitesi%' then 'Olympic Family Referrals'
+                                          when source_medium like '%worldbowling%' then 'Olympic Family Referrals'
+                                          when source_medium like '%olympic.kz%' then 'Olympic Family Referrals'
+                                          when source_medium like '%coe.es%' then 'Olympic Family Referrals'
+                                          when source_medium like '%firs.rollersports.tv%' then 'Olympic Family Referrals'
+                                          when source_medium like '%badminton%' then 'Olympic Family Referrals'
+                                          when source_medium like '%worldwrestling%' then 'Olympic Family Referrals'
+                                          when source_medium like '%worldcurling%' then 'Olympic Family Referrals'
+                                          when source_medium like '%cijm%' then 'Olympic Family Referrals'
+                                          when source_medium like '%fis-%' then 'Olympic Family Referrals'
+                                          when source_medium like '%iwf%' then 'Olympic Family Referrals'
+                                          when source_medium like '%fidal%' then 'Olympic Family Referrals'
+                                          when source_medium like '%worldcurling%' then 'Olympic Family Referrals'
+                                          when source_medium like '%worldgames%' then 'Olympic Family Referrals'
+                                          when source_medium like '%tarragona2018%' then 'Olympic Family Referrals'
+                                          when source_medium like '%triathlon.org%' then 'Olympic Family Referrals'
+                                          when source_medium like '%worldarchery%' then 'Olympic Family Referrals'
+                                          when source_medium like '%worlddance%' then 'Olympic Family Referrals'
+                                          when source_medium like '%worldbowling%' then 'Olympic Family Referrals'
+                                          when source_medium like '%worldtaekwondo%' then 'Olympic Family Referrals'
+                                          when source_medium like '%olympians.org%' then 'Olympic Family Referrals'
+                                          when source_medium like '%teamrussia%' then 'Olympic Family Referrals'
+                                          when source_medium like '%segas.gr%' then 'Olympic Family Referrals'
+                                          when source_medium like '%fiba%' then 'Olympic Family Referrals'
+                                          when source_medium like '%fifa%' then 'Olympic Family Referrals'
+                                          when source_medium like '%biathlonworld%' then 'Olympic Family Referrals'
+                                          when source_medium like '%irfracquetball%' then 'Olympic Family Referrals'
+                                          when source_medium like '%itftennis%' then 'Olympic Family Referrals'
+                                          when source_medium like '%internationalracquetball%' then 'Olympic Family Referrals'
+                                          when source_medium like '%wbsc.org%' then 'Olympic Family Referrals'
+                                          when source_medium like '%worldrowing%' then 'Olympic Family Referrals'
+                                          when source_medium like '%usagym.org%' then 'Olympic Family Referrals'
+                                          else 'Other Referrals'
+                                          end)
+      when first_channel = 'Social' then (case
+                                          when source_medium like '%facebook%' then 'Facebook'
+                                          when source_medium like '%weibo%' then 'Weibo'
+                                          when source_medium like '%youtube%' then 'YouTube'
+                                          when source_medium like '%linkedin%' then 'LinkedIn'
+                                          when source_medium like '%instagram%' then 'Instagram'
+                                          when source_medium like '%twitter%' then 'Twitter'
+                                          when source_medium like '%vk.%' then 'VKontakte'
+                                          when source_medium like '%ameblo%' then 'Ameblo'
+                                          when source_medium like '%t.co%' then 'Twitter'
+                                          else 'Other Social'
+                                          end)
+      else first_channel
+      end as drilldown
+    , source_medium
+    , fullvisitorid
+  from user_mapping_base
+  where 1=1
+    and rk = 1
+  group by 1, 2, 3, 4, 5
+)
+, nov_users as (
+  select 
+    extract(month FROM date) as month
+    , session_id
+    , fullvisitorid
+  from webandapp
+  where 1=1
+    and date >= '2018-11-01'
+    and date < '2018-12-01'
+)
+, dec_users as (
+  select
+    extract(month FROM date) as month
+    , session_id
+    , fullvisitorid
+  from webandapp
+  where 1=1
+    and date >= '2018-12-01'
+    and date < '2019-01-01'
+)
+, dec_return_users as (
+  select
+    month
+    , fullvisitorid
+  from dec_users
+  where 1=1
+    and fullvisitorid in (select fullvisitorid from nov_users)
+    and session_id not in (select session_id from nov_users)
+)
+, jan_users as (
+  select
+    extract(month FROM date) as month
+    , session_id
+    , fullvisitorid
+  from webandapp
+  where 1=1
+    and date >= '2019-01-01'
+    and date < '2019-02-01'
+)
+, jan_return_users as (
+  select
+    month
+    , fullvisitorid
+  from jan_users
+  where 1=1
+    and fullvisitorid in (select fullvisitorid from dec_users)
+    and session_id not in (select session_id from dec_users)
+)
+
+select
+  case when cast(month as string) = '12' then 'Dec' else 'Jan' end as month
+  , case 
+    when first_channel = 'Paid' then 'Paid'
+    when platform_category = 'Embed' then 'Embed'
+    else 'Core Traffic'
+    end as platform_category
+  , case 
+      when first_channel = 'Paid' then drilldown 
+      when platform_category = 'Embed' then (case    
+                                              when source_medium like '%nbcsports%' then 'RHB'
+                                              when source_medium like '%nbc%' then 'RHB'
+                                              when source_medium like '%eurosport.%' then 'RHB'
+                                              when source_medium like '%beinsports%' then 'RHB'
+                                              when source_medium like '%globo.com%' then 'RHB'
+                                              when source_medium like '%nhk.or%' then 'RHB'
+                                              when source_medium like '%ntv.co.jp%' then 'RHB'
+                                              when source_medium like '%fujitv%' then 'RHB'
+                                              when source_medium like '%tv-asahi%' then 'RHB'
+                                              when source_medium like '%tbs.co.jp%' then 'RHB'
+                                              when source_medium like '%tv-tokyo%' then 'RHB'
+                                              when source_medium like '%gorin.jp%' then 'RHB'
+                                              when source_medium like '%livesoccer%' then 'RHB' -- ss9 / looks like super sports only has this one
+                                              when source_medium like '%naver%' then 'Distribution'
+                                              when source_medium like '%navercorp%' then 'Distribution'
+                                              when source_medium like '%sportsnavi%' then 'Distribution'
+                                              when source_medium like '%bridgestone%' then 'FPs'  
+                                              -- didn't see anyone from toyota that weren't articles
+                                              when source_medium like '%olympic.org%' then 'Olympic Movement'
+                                              when source_medium like '%buenosaires%' then 'Olympic Movement'
+                                              when source_medium like '%pyeongchang2018%' then 'Olympic Movement'
+                                              when source_medium like '%paralympic%' then 'Olympic Movement'
+                                              when source_medium like '%issf-sports%' then 'Olympic Movement'
+                                              when source_medium like '%cheerunion%' then 'Olympic Movement'
+                                              when source_medium like '%canoeicf%' then 'Olympic Movement'
+                                              when source_medium like '%com.org.mx%' then 'Olympic Movement'
+                                              when source_medium like '%ifsc-climbing%' then 'Olympic Movement'
+                                              when source_medium like '%isu.org%' then 'Olympic Movement'
+                                              when source_medium like '%obs.tv%' then 'Olympic Movement'
+                                              when source_medium like '%aiba%' then 'Olympic Movement'
+                                              when source_medium like '%teamusa%' then 'Olympic Movement'
+                                              when source_medium like '%olimpiyatkomitesi%' then 'Olympic Movement'
+                                              when source_medium like '%worldbowling%' then 'Olympic Movement'
+                                              when source_medium like '%olympic.kz%' then 'Olympic Movement'
+                                              when source_medium like '%coe.es%' then 'Olympic Movement'
+                                              when source_medium like '%firs.rollersports.tv%' then 'Olympic Movement'
+                                              when source_medium like '%badminton%' then 'Olympic Movement'
+                                              when source_medium like '%worldwrestling%' then 'Olympic Movement'
+                                              when source_medium like '%worldcurling%' then 'Olympic Movement'
+                                              when source_medium like '%cijm%' then 'Olympic Movement'
+                                              when source_medium like '%fis-%' then 'Olympic Movement'
+                                              when source_medium like '%iwf%' then 'Olympic Movement'
+                                              when source_medium like '%fidal%' then 'Olympic Movement'
+                                              when source_medium like '%worldcurling%' then 'Olympic Movement'
+                                              when source_medium like '%worldgames%' then 'Olympic Movement'
+                                              when source_medium like '%tarragona2018%' then 'Olympic Movement'
+                                              when source_medium like '%triathlon.org%' then 'Olympic Movement'
+                                              when source_medium like '%worldarchery%' then 'Olympic Movement'
+                                              when source_medium like '%worlddance%' then 'Olympic Movement'
+                                              when source_medium like '%worldbowling%' then 'Olympic Movement'
+                                              when source_medium like '%worldtaekwondo%' then 'Olympic Movement'
+                                              when source_medium like '%olympicans.org%' then 'Olympic Movement'
+                                              when source_medium like '%teamrussia%' then 'Olympic Movement'
+                                              when source_medium like '%segas.gr%' then 'Olympic Movement'
+                                              when source_medium like '%fiba%' then 'Olympic Movement'
+                                              when source_medium like '%fifa%' then 'Olympic Movement'
+                                              when source_medium like '%biathlonworld%' then 'Olympic Movement'
+                                              when source_medium like '%irfracquetball%' then 'Olympic Movement'
+                                              when source_medium like '%itftennis%' then 'Olympic Movement'
+                                              when source_medium like '%internationalracquetball%' then 'Olympic Movement'
+                                              when source_medium like '%wbsc.org%' then 'Olympic Movement'
+                                              when source_medium like '%worldrowing%' then 'Olympic Movement'
+                                              when source_medium like '%usagym.org%' then 'Olympic Movement'
+                                              else 'Other Partners'
+                                              end)
+      when first_channel = 'Organic Search' then 'SEO' 
+      when first_channel = 'Email' then 'CRM' 
+      when first_channel = 'Referral' then (case    
+                                              when source_medium like '%nbcsports%' then 'RHB Referrals'
+                                              when source_medium like '%nbc%' then 'RHB Referrals'
+                                              when source_medium like '%eurosport.%' then 'RHB Referrals'
+                                              when source_medium like '%beinsports%' then 'RHB Referrals'
+                                              when source_medium like '%globo.com%' then 'RHB Referrals'
+                                              when source_medium like '%nhk.or%' then 'RHB Referrals'
+                                              when source_medium like '%ntv.co.jp%' then 'RHB Referrals'
+                                              when source_medium like '%fujitv%' then 'RHB Referrals'
+                                              when source_medium like '%tv-asahi%' then 'RHB Referrals'
+                                              when source_medium like '%tbs.co.jp%' then 'RHB Referrals'
+                                              when source_medium like '%tv-tokyo%' then 'RHB Referrals'
+                                              when source_medium like '%gorin.jp%' then 'RHB Referrals'
+                                              when source_medium like '%livesoccer%' then 'RHB Referrals' -- ss9 / looks like super sports only has this one
+                                              when source_medium like '%naver.%' then 'Partnership Referrals'
+                                              when source_medium like '%navercorp%' then 'Partnership Referrals'
+                                              when source_medium like '%sportsnavi%' then 'Partnership Referrals'
+                                              when source_medium like '%bridgestone%' then 'FP Referrals'  
+                                              -- didn't see anyone from toyota that weren't articles
+                                              when source_medium like '%olympic.org%' then 'Olympic Family Referrals'
+                                              when source_medium like '%buenosaires2018%' then 'Olympic Family Referrals'
+                                              when source_medium like '%pyeongchang2018%' then 'Olympic Family Referrals'
+                                              when source_medium like '%paralympic%' then 'Olympic Family Referrals'
+                                              when source_medium like '%issf-sports%' then 'Olympic Family Referrals'
+                                              when source_medium like '%cheerunion%' then 'Olympic Family Referrals'
+                                              when source_medium like '%canoeicf%' then 'Olympic Family Referrals'
+                                              when source_medium like '%com.org.mx%' then 'Olympic Family Referrals'
+                                              when source_medium like '%ifsc-climbing%' then 'Olympic Family Referrals'
+                                              when source_medium like '%isu.org%' then 'Olympic Family Referrals'
+                                              when source_medium like '%obs.tv%' then 'Olympic Family Referrals'
+                                              when source_medium like '%aiba%' then 'Olympic Family Referrals'
+                                              when source_medium like '%teamusa%' then 'Olympic Family Referrals'
+                                              when source_medium like '%olimpiyatkomitesi%' then 'Olympic Family Referrals'
+                                              when source_medium like '%worldbowling%' then 'Olympic Family Referrals'
+                                              when source_medium like '%olympic.kz%' then 'Olympic Family Referrals'
+                                              when source_medium like '%coe.es%' then 'Olympic Family Referrals'
+                                              when source_medium like '%firs.rollersports.tv%' then 'Olympic Family Referrals'
+                                              when source_medium like '%badminton%' then 'Olympic Family Referrals'
+                                              when source_medium like '%worldwrestling%' then 'Olympic Family Referrals'
+                                              when source_medium like '%worldcurling%' then 'Olympic Family Referrals'
+                                              when source_medium like '%cijm%' then 'Olympic Family Referrals'
+                                              when source_medium like '%fis-%' then 'Olympic Family Referrals'
+                                              when source_medium like '%iwf%' then 'Olympic Family Referrals'
+                                              when source_medium like '%fidal%' then 'Olympic Family Referrals'
+                                              when source_medium like '%worldcurling%' then 'Olympic Family Referrals'
+                                              when source_medium like '%worldgames%' then 'Olympic Family Referrals'
+                                              when source_medium like '%tarragona2018%' then 'Olympic Family Referrals'
+                                              when source_medium like '%triathlon.org%' then 'Olympic Family Referrals'
+                                              when source_medium like '%worldarchery%' then 'Olympic Family Referrals'
+                                              when source_medium like '%worlddance%' then 'Olympic Family Referrals'
+                                              when source_medium like '%worldbowling%' then 'Olympic Family Referrals'
+                                              when source_medium like '%worldtaekwondo%' then 'Olympic Family Referrals'
+                                              when source_medium like '%olympians.org%' then 'Olympic Family Referrals'
+                                              when source_medium like '%teamrussia%' then 'Olympic Family Referrals'
+                                              when source_medium like '%segas.gr%' then 'Olympic Family Referrals'
+                                              when source_medium like '%fiba%' then 'Olympic Family Referrals'
+                                              when source_medium like '%fifa%' then 'Olympic Family Referrals'
+                                              when source_medium like '%biathlonworld%' then 'Olympic Family Referrals'
+                                              when source_medium like '%irfracquetball%' then 'Olympic Family Referrals'
+                                              when source_medium like '%itftennis%' then 'Olympic Family Referrals'
+                                              when source_medium like '%internationalracquetball%' then 'Olympic Family Referrals'
+                                              when source_medium like '%wbsc.org%' then 'Olympic Family Referrals'
+                                              when source_medium like '%worldrowing%' then 'Olympic Family Referrals'
+                                              when source_medium like '%usagym.org%' then 'Olympic Family Referrals'
+                                              else 'Other Referrals'
+                                              end)
+      else first_channel
+      end as first_channel
+  , drilldown
+  , count(distinct dec.fullvisitorid) as users
+from dec_return_users dec
+left join ono_and_embeds
+using (fullvisitorid)
+group by 1, 2, 3, 4
+having [platform_category=Platform_Category]
+
+union all
+
+select
+  case when cast(month as string) = '1' then 'Jan' else 'Dec' end as month
+  , case 
+    when first_channel = 'Paid' then 'Paid'
+    when platform_category = 'Embed' then 'Embed'
+    else 'Core Traffic'
+    end as platform_category
+  , case 
+      when first_channel = 'Paid' then drilldown 
+      when platform_category = 'Embed' then (case when source_medium like '%nbcsports%' then 'RHB'
+                                              when source_medium like '%nbc%' then 'RHB'
+                                              when source_medium like '%eurosport.%' then 'RHB'
+                                              when source_medium like '%beinsports%' then 'RHB'
+                                              when source_medium like '%globo.com%' then 'RHB'
+                                              when source_medium like '%nhk.or%' then 'RHB'
+                                              when source_medium like '%ntv.co.jp%' then 'RHB'
+                                              when source_medium like '%fujitv%' then 'RHB'
+                                              when source_medium like '%tv-asahi%' then 'RHB'
+                                              when source_medium like '%tbs.co.jp%' then 'RHB'
+                                              when source_medium like '%tv-tokyo%' then 'RHB'
+                                              when source_medium like '%gorin.jp%' then 'RHB'
+                                              when source_medium like '%livesoccer%' then 'RHB' -- ss9 / looks like super sports only has this one
+                                              when source_medium like '%naver%' then 'Distribution'
+                                              when source_medium like '%navercorp%' then 'Distribution'
+                                              when source_medium like '%sportsnavi%' then 'Distribution'
+                                              when source_medium like '%bridgestone%' then 'FPs'  
+                                              -- didn't see anyone from toyota that weren't articles
+                                              when source_medium like '%olympic.org%' then 'Olympic Movement'
+                                              when source_medium like '%buenosaires%' then 'Olympic Movement'
+                                              when source_medium like '%pyeongchang2018%' then 'Olympic Movement'
+                                              when source_medium like '%paralympic%' then 'Olympic Movement'
+                                              when source_medium like '%issf-sports%' then 'Olympic Movement'
+                                              when source_medium like '%cheerunion%' then 'Olympic Movement'
+                                              when source_medium like '%canoeicf%' then 'Olympic Movement'
+                                              when source_medium like '%com.org.mx%' then 'Olympic Movement'
+                                              when source_medium like '%ifsc-climbing%' then 'Olympic Movement'
+                                              when source_medium like '%isu.org%' then 'Olympic Movement'
+                                              when source_medium like '%obs.tv%' then 'Olympic Movement'
+                                              when source_medium like '%aiba%' then 'Olympic Movement'
+                                              when source_medium like '%teamusa%' then 'Olympic Movement'
+                                              when source_medium like '%olimpiyatkomitesi%' then 'Olympic Movement'
+                                              when source_medium like '%worldbowling%' then 'Olympic Movement'
+                                              when source_medium like '%olympic.kz%' then 'Olympic Movement'
+                                              when source_medium like '%coe.es%' then 'Olympic Movement'
+                                              when source_medium like '%firs.rollersports.tv%' then 'Olympic Movement'
+                                              when source_medium like '%badminton%' then 'Olympic Movement'
+                                              when source_medium like '%worldwrestling%' then 'Olympic Movement'
+                                              when source_medium like '%worldcurling%' then 'Olympic Movement'
+                                              when source_medium like '%cijm%' then 'Olympic Movement'
+                                              when source_medium like '%fis-%' then 'Olympic Movement'
+                                              when source_medium like '%iwf%' then 'Olympic Movement'
+                                              when source_medium like '%fidal%' then 'Olympic Movement'
+                                              when source_medium like '%worldcurling%' then 'Olympic Movement'
+                                              when source_medium like '%worldgames%' then 'Olympic Movement'
+                                              when source_medium like '%tarragona2018%' then 'Olympic Movement'
+                                              when source_medium like '%triathlon.org%' then 'Olympic Movement'
+                                              when source_medium like '%worldarchery%' then 'Olympic Movement'
+                                              when source_medium like '%worlddance%' then 'Olympic Movement'
+                                              when source_medium like '%worldbowling%' then 'Olympic Movement'
+                                              when source_medium like '%worldtaekwondo%' then 'Olympic Movement'
+                                              when source_medium like '%olympicans.org%' then 'Olympic Movement'
+                                              when source_medium like '%teamrussia%' then 'Olympic Movement'
+                                              when source_medium like '%segas.gr%' then 'Olympic Movement'
+                                              when source_medium like '%fiba%' then 'Olympic Movement'
+                                              when source_medium like '%fifa%' then 'Olympic Movement'
+                                              when source_medium like '%biathlonworld%' then 'Olympic Movement'
+                                              when source_medium like '%irfracquetball%' then 'Olympic Movement'
+                                              when source_medium like '%itftennis%' then 'Olympic Movement'
+                                              when source_medium like '%internationalracquetball%' then 'Olympic Movement'
+                                              when source_medium like '%wbsc.org%' then 'Olympic Movement'
+                                              when source_medium like '%worldrowing%' then 'Olympic Movement'
+                                              when source_medium like '%usagym.org%' then 'Olympic Movement'
+                                              else 'Other Partners'
+                                              end))
+      when first_channel = 'Organic Search' then 'SEO' 
+      when first_channel = 'Email' then 'CRM' 
+      when first_channel = 'Referral' then ((case    
+                                              when source_medium like '%nbcsports%' then 'RHB Referrals'
+                                              when source_medium like '%nbc%' then 'RHB Referrals'
+                                              when source_medium like '%eurosport.%' then 'RHB Referrals'
+                                              when source_medium like '%beinsports%' then 'RHB Referrals'
+                                              when source_medium like '%globo.com%' then 'RHB Referrals'
+                                              when source_medium like '%nhk.or%' then 'RHB Referrals'
+                                              when source_medium like '%ntv.co.jp%' then 'RHB Referrals'
+                                              when source_medium like '%fujitv%' then 'RHB Referrals'
+                                              when source_medium like '%tv-asahi%' then 'RHB Referrals'
+                                              when source_medium like '%tbs.co.jp%' then 'RHB Referrals'
+                                              when source_medium like '%tv-tokyo%' then 'RHB Referrals'
+                                              when source_medium like '%gorin.jp%' then 'RHB Referrals'
+                                              when source_medium like '%livesoccer%' then 'RHB Referrals' -- ss9 / looks like super sports only has this one
+                                              when source_medium like '%naver.%' then 'Partnership Referrals'
+                                              when source_medium like '%navercorp%' then 'Partnership Referrals'
+                                              when source_medium like '%sportsnavi%' then 'Partnership Referrals'
+                                              when source_medium like '%bridgestone%' then 'FP Referrals'  
+                                              -- didn't see anyone from toyota that weren't articles
+                                              when source_medium like '%olympic.org%' then 'Olympic Family Referrals'
+                                              when source_medium like '%buenosaires2018%' then 'Olympic Family Referrals'
+                                              when source_medium like '%pyeongchang2018%' then 'Olympic Family Referrals'
+                                              when source_medium like '%paralympic%' then 'Olympic Family Referrals'
+                                              when source_medium like '%issf-sports%' then 'Olympic Family Referrals'
+                                              when source_medium like '%cheerunion%' then 'Olympic Family Referrals'
+                                              when source_medium like '%canoeicf%' then 'Olympic Family Referrals'
+                                              when source_medium like '%com.org.mx%' then 'Olympic Family Referrals'
+                                              when source_medium like '%ifsc-climbing%' then 'Olympic Family Referrals'
+                                              when source_medium like '%isu.org%' then 'Olympic Family Referrals'
+                                              when source_medium like '%obs.tv%' then 'Olympic Family Referrals'
+                                              when source_medium like '%aiba%' then 'Olympic Family Referrals'
+                                              when source_medium like '%teamusa%' then 'Olympic Family Referrals'
+                                              when source_medium like '%olimpiyatkomitesi%' then 'Olympic Family Referrals'
+                                              when source_medium like '%worldbowling%' then 'Olympic Family Referrals'
+                                              when source_medium like '%olympic.kz%' then 'Olympic Family Referrals'
+                                              when source_medium like '%coe.es%' then 'Olympic Family Referrals'
+                                              when source_medium like '%firs.rollersports.tv%' then 'Olympic Family Referrals'
+                                              when source_medium like '%badminton%' then 'Olympic Family Referrals'
+                                              when source_medium like '%worldwrestling%' then 'Olympic Family Referrals'
+                                              when source_medium like '%worldcurling%' then 'Olympic Family Referrals'
+                                              when source_medium like '%cijm%' then 'Olympic Family Referrals'
+                                              when source_medium like '%fis-%' then 'Olympic Family Referrals'
+                                              when source_medium like '%iwf%' then 'Olympic Family Referrals'
+                                              when source_medium like '%fidal%' then 'Olympic Family Referrals'
+                                              when source_medium like '%worldcurling%' then 'Olympic Family Referrals'
+                                              when source_medium like '%worldgames%' then 'Olympic Family Referrals'
+                                              when source_medium like '%tarragona2018%' then 'Olympic Family Referrals'
+                                              when source_medium like '%triathlon.org%' then 'Olympic Family Referrals'
+                                              when source_medium like '%worldarchery%' then 'Olympic Family Referrals'
+                                              when source_medium like '%worlddance%' then 'Olympic Family Referrals'
+                                              when source_medium like '%worldbowling%' then 'Olympic Family Referrals'
+                                              when source_medium like '%worldtaekwondo%' then 'Olympic Family Referrals'
+                                              when source_medium like '%olympians.org%' then 'Olympic Family Referrals'
+                                              when source_medium like '%teamrussia%' then 'Olympic Family Referrals'
+                                              when source_medium like '%segas.gr%' then 'Olympic Family Referrals'
+                                              when source_medium like '%fiba%' then 'Olympic Family Referrals'
+                                              when source_medium like '%fifa%' then 'Olympic Family Referrals'
+                                              when source_medium like '%biathlonworld%' then 'Olympic Family Referrals'
+                                              when source_medium like '%irfracquetball%' then 'Olympic Family Referrals'
+                                              when source_medium like '%itftennis%' then 'Olympic Family Referrals'
+                                              when source_medium like '%internationalracquetball%' then 'Olympic Family Referrals'
+                                              when source_medium like '%wbsc.org%' then 'Olympic Family Referrals'
+                                              when source_medium like '%worldrowing%' then 'Olympic Family Referrals'
+                                              when source_medium like '%usagym.org%' then 'Olympic Family Referrals'
+                                              else 'Other Referrals'
+                                              end))
+      else first_channel
+      end as first_channel
+  , drilldown
+  , count(distinct jan.fullvisitorid) as users
+from jan_return_users jan
+left join ono_and_embeds
+using (fullvisitorid)
+group by 1, 2, 3, 4
+having [platform_category=Platform_Category]
+
+order by 1, 2 desc
