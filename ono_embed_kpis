@@ -1,0 +1,166 @@
+#standardSQL
+with web_and_app_users_ as (
+  select 
+    fullVisitorId
+    , sum(case
+        when hits.page.pagePath = '/ocwidget/' then 0
+        when hits.page.pagePath like '%syndicated%' then 0
+        else 1
+        end) as platform_category
+  from `olympicchannel-ga.168112989.ga_sessions*`, unnest(hits) as hits
+  where 1=1
+    and [cast(parse_date('%Y%m%d', date) as date)=daterange]
+    and not [bot_traffic]
+    and trafficsource.source NOT IN ('platform.utest.com')
+  group by 1
+  
+  union all
+  
+  select 
+    fullVisitorId
+    , 1 as platform_category
+  from `olympicchannel-ga.178594195.ga_sessions*`
+  where 1=1
+    and [cast(parse_date('%Y%m%d', date) as date)=daterange]
+    and not [bot_traffic]
+    and trafficsource.source NOT IN ('platform.utest.com')
+)
+, total_users as (
+  select 
+    case
+      when platform_category > 0 then 'On_Platform' else 'Embedded' end as platform_category
+    , count(distinct fullVisitorId) as users
+  from web_and_app_users_
+  group by 1
+)
+, web_and_app_sessions_ as (
+  select
+    fullVisitorId
+    , visitStartTime
+    , hits.page.pagePath
+    , totals.pageviews as pageviews
+    , totals.visits as visits
+    , hits.type
+    , hits.hitNumber
+    , case
+        when hits.page.pagePath = '/ocwidget/' then 0
+        when hits.page.pagePath like '%syndicated%' then 0
+        else 1
+        end as platform_category
+    , min(hits.hitNumber) over (partition by fullVisitorId, visitStartTime) as first_hit
+  from `olympicchannel-ga.168112989.ga_sessions*` as GA,
+    UNNEST(GA.hits) as hits
+  where 1=1
+    and [cast(parse_date('%Y%m%d', date) as date)=daterange]
+    and not [bot_traffic]
+    and trafficsource.source NOT IN ('platform.utest.com')
+  
+  union all
+  
+  select
+    fullVisitorId
+    , visitStartTime
+    , hits.page.pagePath
+    , totals.pageviews as pageviews
+    , totals.visits as visits
+    , hits.type
+    , hits.hitNumber
+    , 1 as platform_category
+    , min(hits.hitNumber) over (partition by fullVisitorId, visitStartTime) as first_hit
+  from `olympicchannel-ga.178594195.ga_sessions*` as GA,
+    UNNEST(GA.hits) as hits
+  where 1=1
+    and [cast(parse_date('%Y%m%d', date) as date)=daterange]
+    and not [bot_traffic]
+    and trafficsource.source NOT IN ('platform.utest.com')
+)
+, platform_breakdown_ as (
+  select
+    fullVisitorId
+    , visitStartTime
+    , sum(platform_category) as platform_category
+    , sum(case
+      when hitNumber = first_hit then visits
+      else 0
+      end) as sessions
+  from web_and_app_sessions_
+  group by 1, 2
+)
+, total_sessions as (
+  select
+    "Embedded" as platform_category
+    , sum(sessions) as sessions
+  from platform_breakdown_
+  where 1=1
+    and platform_category = 0
+  group by 1
+
+  union all
+
+  select
+    "On_Platform" as platform_category
+    , sum(sessions) as sessions
+  from platform_breakdown_
+  where 1=1
+    and platform_category > 0
+  group by 1
+)
+, pageviews_ as (
+  select
+    pagePath
+    , pageviews
+  from web_and_app_sessions_
+  where 1=1
+    and type = 'PAGE'
+)
+, total_pageviews as (
+  select
+    "Embedded" as platform_category
+    , count(pageviews) as pageviews
+  from pageviews_
+  where 1=1
+    and lower(pagePath) like '%syndicated%'
+    or pagePath = '/ocwidget/'
+
+  union all
+
+  select
+    "On_Platform" as platform_category
+    , count(pageviews) as pageviews
+  from pageviews_
+  where 1=1
+    and lower(pagePath) not like '%syndicated%'
+    and pagePath != '/ocwidget/'
+)
+, screenviews_ as (
+  select 
+    fullvisitorId
+    , hits.type as hit_type
+ from `olympicchannel-ga.178594195.ga_sessions*`, unnest(hits) as hits
+ where 1=1
+   and [cast(parse_date('%Y%m%d', date) as date)=daterange]
+   and totals.visits = 1
+)
+, total_screenviews as (  
+  select 
+  "On_Platform" as platform_category
+  , count(*) as screenviews
+  from screenviews_
+  where 1=1
+    and hit_type = 'APPVIEW'
+)
+
+select
+  u.platform_category
+  , users
+  , sessions
+  , pageviews
+  , screenviews
+from total_users u
+left join total_sessions
+using (platform_category)
+left join total_pageviews
+using (platform_category)
+left join total_screenviews
+using(platform_category)
+order by 1 desc
